@@ -28,7 +28,8 @@ MyObject2* makeGarbage() {
 	MyObject* c = NEW(MyObject);
 	c->b = a;
 	c->a = a;
-	staticA =a;
+	staticA = a;
+	IS_STATIC_ROOT(staticA) = true;
 	return a;
 }
 

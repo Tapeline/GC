@@ -3,11 +3,11 @@
 #include "stdlib.h"
 #include "setjmp.h"
 
-void* baseStackPtr = NULL;
+uintptr_t baseStackPtr = 0;
 GcCollectible* worklist = NULL;
 GcCollectible* allObjects = NULL;
-GcCollectible* minAllocatedAddress = NULL;
-GcCollectible* maxAllocatedAddress = NULL;
+uintptr_t minAllocatedAddress = 0;
+uintptr_t maxAllocatedAddress = 0;
 
 GcCollectible* allocateNew(GcTypeInfo* type) {
 	GcCollectible* ptr = (GcCollectible*) malloc(type->size);
@@ -18,13 +18,14 @@ GcCollectible* allocateNew(GcTypeInfo* type) {
 			exit(67);
 		}
 	}
-	if (minAllocatedAddress == NULL || ptr < minAllocatedAddress) minAllocatedAddress = ptr;
-	if (maxAllocatedAddress == NULL || ptr > maxAllocatedAddress) maxAllocatedAddress = ptr;
+	if (minAllocatedAddress == 0 || (uintptr_t) ptr < minAllocatedAddress) minAllocatedAddress = (uintptr_t) ptr;
+	if (maxAllocatedAddress == 0 || (uintptr_t) ptr > maxAllocatedAddress) maxAllocatedAddress = (uintptr_t) ptr;
 	ptr->nextObj = allObjects;
 	allObjects = ptr;
 	ptr->mark = M_UNVISITED;
 	ptr->nextWorkObj = NULL;
 	ptr->type = type;
+	ptr->isStaticRoot = false;
 	return ptr;
 }
 
@@ -33,19 +34,28 @@ void gc() {
 	sweep();
 }
 
-void markFromStack() {
+__attribute__((noinline)) void markFromStack() {
 	worklist = NULL;
 	// spill registers onto stack
 	jmp_buf jb;
 	setjmp(jb);
 	GC_TRACE("Marking from stack [%p; %p]\n", baseStackPtr, (void*) &jb);
-	if (baseStackPtr == NULL) {
+	if (baseStackPtr == 0) {
 		GC_TRACE("Gc wasn't initialised");
 		exit(67);
 	}
-	for (GcCollectible** ptrPtr = (GcCollectible**) &jb; ptrPtr < baseStackPtr; ptrPtr++) {
-		GcCollectible* maybePtr = *ptrPtr;
-		if (maybePtr < minAllocatedAddress || maybePtr > maxAllocatedAddress) continue;
+	uintptr_t from, to;
+	if (baseStackPtr < (uintptr_t) &jb) {
+		from = baseStackPtr;
+		to = (uintptr_t) &jb;
+	} else {
+		from = (uintptr_t) &jb;
+		to  = baseStackPtr;
+	}
+	to -= sizeof(GcCollectible*);
+	GcCollectible* maybePtr;
+	for (uintptr_t ptrPtr = from; ptrPtr < to; ptrPtr+=sizeof(GcCollectible*)) {
+		if ((uintptr_t) maybePtr < minAllocatedAddress || (uintptr_t) maybePtr > maxAllocatedAddress) continue;
 		if (!isInObjectChain(maybePtr)) continue;
 		if (maybePtr->mark == M_UNVISITED) {
 			GC_TRACE("stack root %p found at %p\n", (void*) maybePtr, (void*) ptrPtr);
@@ -54,6 +64,17 @@ void markFromStack() {
 			maybePtr->mark = M_VISITING;
 			mark();
 		}
+	}
+	maybePtr = allObjects;
+	while (maybePtr != NULL) {
+		if (maybePtr->isStaticRoot && maybePtr->mark == M_UNVISITED) {
+			GC_TRACE("marking static root %p\n", (void*) maybePtr);
+			maybePtr->nextWorkObj = worklist;
+			worklist = maybePtr;
+			maybePtr->mark = M_VISITING;
+			mark();
+		}
+		maybePtr = maybePtr->nextObj;
 	}
 }
 
@@ -94,6 +115,7 @@ void mark() {
 void sweep() {
 	GcCollectible* current = allObjects;
 	GcCollectible* next = NULL;
+	GcCollectible* prev = NULL;
 	#ifdef GC_DEBUG_SWEEP_ONLY
 	#define GC_DEBUG
 	#endif
@@ -103,11 +125,15 @@ void sweep() {
 		if (current->mark == M_VISITED) {
 			GC_TRACE("Kept %p\n", (void*) current);
 			current->mark = M_UNVISITED;
+			prev = current;
+			current = next;
 		} else {
 			GC_TRACE("Swept %p\n", (void*) current);
+			if (prev != NULL) prev->nextObj = next;
+			else allObjects = next;
 			free(current);
+			current = next;
 		}
-		current = next;
 	}
 	#ifdef GC_DEBUG_SWEEP_ONLY
 	#undef GC_DEBUG
@@ -123,5 +149,5 @@ void dumpObjInfo(GcCollectible* obj) {
 }
 
 void gcInit(void* sp) {
-	baseStackPtr = sp;
+	baseStackPtr = (uintptr_t) sp;
 }

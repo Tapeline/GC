@@ -19,7 +19,8 @@ typedef struct {
 	GcTypeInfo* type;
 	void* nextObj;
 	void* nextWorkObj;
-	int mark;
+	bool isStaticRoot;
+	unsigned char mark;
 } GcCollectible;
 
 #define GC_COLLECTIBLE GcCollectible gcHeader;
@@ -49,6 +50,8 @@ bool isInObjectChain(GcCollectible* obj);
 #define GC_TRACE(...) (void)0
 #define GC_DUMP_OBJ(obj) (void)0
 #endif
+
+#define IS_STATIC_ROOT(obj) ((GcCollectible*) obj)->isStaticRoot
 
 #define GC_INIT() \
 	int __gcInitDummy; \
